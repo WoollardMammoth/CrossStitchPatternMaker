@@ -1,0 +1,177 @@
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background-color: #f4f4f4;
+    margin: 0;
+    padding: 0;
+    overflow-x: hidden; /* Prevent horizontal scroll when sidebar is closed */
+}
+
+/* --- SIDEBAR STYLES --- */
+.sidebar {
+    height: 100%;
+    width: 300px;
+    position: fixed;
+    z-index: 1000;
+    top: 0;
+    left: -320px; /* Hidden by default */
+    background-color: #fff;
+    box-shadow: 2px 0 5px rgba(0,0,0,0.2);
+    padding: 20px;
+    overflow-y: auto;
+    transition: 0.3s; /* Smooth slide effect */
+}
+
+.sidebar.open {
+    left: 0;
+}
+
+.sidebar-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #ddd;
+    margin-bottom: 20px;
+}
+
+.sidebar-header h2 {
+    margin: 0;
+    font-size: 1.2rem;
+}
+
+.close-btn {
+    background: none;
+    border: none;
+    font-size: 2rem;
+    cursor: pointer;
+    line-height: 1;
+}
+
+/* --- MAIN CONTENT --- */
+.main-content {
+    padding: 20px;
+    transition: margin-left 0.3s;
+    text-align: center;
+}
+
+/* Push content when sidebar opens */
+.sidebar-open-body .main-content {
+    margin-left: 300px; 
+}
+
+/* --- BUTTONS --- */
+.floating-btn {
+    position: fixed;
+    top: 20px;
+    left: 20px;
+    z-index: 100;
+    padding: 10px 15px;
+    background-color: #333;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 1rem;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+}
+
+.primary-btn {
+    width: 100%;
+    padding: 10px;
+    background-color: #007bff;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    margin-bottom: 10px;
+    cursor: pointer;
+}
+
+.success-btn {
+    width: 100%;
+    padding: 10px;
+    background-color: #28a745;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.action-btn {
+    margin-top: 10px;
+    padding: 5px 10px;
+    cursor: pointer;
+}
+
+/* --- FORM ELEMENTS --- */
+.control-group {
+    margin-bottom: 25px;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 15px;
+}
+
+h3 {
+    margin-top: 0;
+    font-size: 0.9rem;
+    color: #555;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+input[type=range] {
+    width: 100%;
+}
+
+/* --- CANVAS & KEY --- */
+canvas {
+    border: 1px solid #ccc;
+    max-width: 100%;
+    height: auto;
+    background: white;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+}
+
+.color-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 10px;
+    margin-top: 20px;
+}
+
+.color-swatch {
+    background: #fff;
+    border: 1px solid #ddd;
+    padding: 5px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    font-size: 0.8rem;
+}
+
+.swatch-box {
+    width: 25px;
+    height: 25px;
+    border: 1px solid #000;
+    margin-right: 8px;
+    flex-shrink: 0;
+    font-weight: bold;
+    font-family: monospace;
+}
+
+/* Normal state: Canvas can be huge, user scrolls */
+canvas {
+    border: 1px solid #ccc;
+    /* Default behavior allows scrolling for large patterns */
+    max-width: none; 
+    height: auto;
+    background: white;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    margin: 0 auto;
+    display: block;
+}
+
+/* "Fit to Screen" State */
+canvas.fit-screen {
+    max-width: 100%;       /* Constrain width to container */
+    max-height: 80vh;      /* Constrain height to 80% of viewport height */
+    object-fit: contain;   /* Ensure aspect ratio is preserved */
+    width: auto;           /* Allow width to shrink if height is the limiting factor */
+}

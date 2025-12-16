@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cross Stitch Pattern Maker</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+
+    <button id="sidebarToggle" class="floating-btn">☰ Controls</button>
+
+    <div id="sidebar" class="sidebar">
+        <div class="sidebar-header">
+            <h2>Settings</h2>
+            <button id="closeSidebar" class="close-btn">&times;</button>
+        </div>
+
+        <div class="control-group">
+            <h3>1. Image Source</h3>
+            <label><input type="radio" name="imgSource" value="upload" checked> Upload</label>
+            <label><input type="radio" name="imgSource" value="url"> URL</label>
+            <br><br>
+            <input type="file" id="fileInput" accept="image/*" style="display:inline-block; width: 100%;">
+            <input type="text" id="urlInput" placeholder="Paste Image URL" style="display:none; width: 100%;">
+            <br><br>
+            <button id="loadImageBtn" class="action-btn">Load Image</button>
+        </div>
+
+        <div class="control-group">
+            <h3>2. Hoop Size</h3>
+            <input type="range" id="hoopSize" min="3" max="15" step="1" value="6">
+            <span id="hoopValue">6"</span>
+        </div>
+
+        <div class="control-group">
+            <h3>3. Fabric Count</h3>
+            <select id="aidaCount" style="width: 100%;">
+                <option value="14" selected>14 Count</option>
+                <option value="16">16 Count</option>
+                <option value="18">18 Count</option>
+                <option value="custom">Custom</option>
+            </select>
+            <input type="number" id="customAida" value="14" style="display:none; width: 60px; margin-top: 5px;">
+        </div>
+
+        <div class="control-group">
+            <h3>4. Max Colors</h3>
+            <input type="range" id="colorCount" min="2" max="32" step="1" value="10">
+            <span id="colorValue">10</span>
+        </div>
+
+        <div class="action-area">
+            <button id="processBtn" class="primary-btn">Generate Pattern</button>
+            <button id="downloadBtn" class="success-btn">Download PDF</button>
+        </div>
+    </div>
+
+    <div class="main-content">
+        <div id="keyContainer" style="display:none;">
+            <h3>Color Key</h3>
+            <div id="colorKey" class="color-grid"></div>
+        </div>
+
+        <div class="view-controls" style="margin-bottom: 10px;">
+            <label style="cursor: pointer; user-select: none;">
+                <input type="checkbox" id="fitToScreenToggle">
+                Fit Pattern to Screen
+            </label>
+        </div>
+
+        <div class="output-area">
+            <canvas id="patternCanvas"></canvas>
+            <p id="stats"></p>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/leeoniya/RgbQuant.js/src/rgbquant.js"></script>
+    <script src="script.js"></script>
+</body>
+
+</html>
