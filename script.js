@@ -126,7 +126,6 @@ loadImageBtn.addEventListener('click', () => {
 });
 
 // Download PDF Button
-// Download PDF Button (Multi-Page Tiling Version)
 downloadBtn.addEventListener('click', async () => {
     if (canvas.width === 0) {
         alert("Please generate a pattern first.");
@@ -144,17 +143,26 @@ downloadBtn.addEventListener('click', async () => {
     const usableHeight = pageHeight - (margin * 2);
 
     // --- SETTINGS ---
-    // How many stitches do we want per page? 
-    // 70-80 is usually a good "Large Print" size.
-    const stitchesPerPageX = 70; 
-    const stitchesPerPageY = 90; 
-
     // Get the total grid size we saved earlier
     const totalGridWidth = parseInt(canvas.dataset.gridWidth);
     const totalGridHeight = parseInt(canvas.dataset.gridHeight);
-    
+    // How many stitches do we want per page? 
+    let stitchesPerPageX = 70;
+    let stitchesPerPageY = 90;
+
+    // A 6" hoop with 14 count fabric is 84 stitches. This, or anything smaller, should fit to a single page.
+    // Set a threshold check this size, and adjust the stitches per page accordingly.
+    if (totalGridWidth <= 84 && totalGridHeight <= 108) {
+        stitchesPerPageX = totalGridWidth;
+        stitchesPerPageY = totalGridHeight;
+    }
+
+    //capture hoop and fabric sizes
+    const hoopSize = hoopSizeSlider.value;
+    const fabricCount = aidaSelect.value;
+
     // Constants from our drawing logic
-    const pixelSize = 15; 
+    const pixelSize = 15;
     const rulerSize = 30; // The margin we added for numbers
 
     // Calculate how many pages we need
@@ -165,86 +173,86 @@ downloadBtn.addEventListener('click', async () => {
     doc.setFontSize(22);
     doc.text("Cross Stitch Pattern", 105, 20, { align: "center" });
     doc.setFontSize(12);
-    doc.text(`Size: ${totalGridWidth} x ${totalGridHeight} stitches`, 105, 30, { align: "center" });
-    
+    doc.text(`Size: ${totalGridWidth} x ${totalGridHeight} stitches, ${hoopSize}" hoop with ${fabricCount} count fabric`, 105, 30, { align: "center" });
+
     // Add a mini preview of the whole thing on the cover
     const fullPatternData = canvas.toDataURL("image/png");
-    doc.addImage(fullPatternData, 'PNG', margin, 40, usableWidth, usableWidth * (canvas.height/canvas.width));
-    
-    doc.text("Pattern continues on next pages...", 105, 280, { align: "center" });
+    doc.addImage(fullPatternData, 'PNG', margin, 40, usableWidth, usableWidth * (canvas.height / canvas.width));
 
+    // Skip the tiled pages for a "full pattern" if the full pattern is only one page. 
+    if (rows * cols > 1) {
+        doc.text("Pattern continues on next pages...", 105, 280, { align: "center" });
 
-    // --- GENERATE TILED PAGES ---
-    
-    // Loop through every "Tile"
-    for (let r = 0; r < rows; r++) {
-        for (let c = 0; c < cols; c++) {
-            doc.addPage();
+        // Establish a contsant siving across all tiledp ages, regardless of how many cells are being fit to the page.
+        const maxTilePixelWidth = rulerSize + (stitchesPerPageX * pixelSize);
+        const maxTilePixelHeight = rulerSize + (stitchesPerPageY * pixelSize);
 
-            // 1. Calculate the pixel coordinates to slice from the main canvas
-            // We must account for the 30px ruler on the very top/left of the original canvas
-            
-            // Start Stitches (Logic)
-            const startStitchX = c * stitchesPerPageX;
-            const startStitchY = r * stitchesPerPageY;
-            
-            // Actual Pixels
-            // If it's the first column, we start at 0 (to include the ruler).
-            // If it's later columns, we start at rulerSize + (stitch * 15).
-            let sx, sy, sWidth, sHeight;
+        // Calculate how much we need to scale down that largest tile to fit the usable page area.
+        const scaleX = usableWidth / maxTilePixelWidth;
+        const scaleY = usableHeight / maxTilePixelHeight;
 
-            // X Calculations
-            if (c === 0) {
-                sx = 0;
-                // Width = Ruler + (Stitches * 15)
-                sWidth = rulerSize + (stitchesPerPageX * pixelSize); 
-            } else {
-                sx = rulerSize + (startStitchX * pixelSize); 
-                sWidth = stitchesPerPageX * pixelSize;
+        // Choose the smaller scale to ensure it fits both width and height.
+        const globalScale = Math.min(scaleX, scaleY);
+
+        // --- GENERATE TILED PAGES ---
+        for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+                doc.addPage();
+
+                const startStitchX = c * stitchesPerPageX;
+                const startStitchY = r * stitchesPerPageY;
+
+                let sx, sy, sWidth, sHeight;
+
+                // X Calculations (Same as before)
+                if (c === 0) {
+                    sx = 0;
+                    sWidth = rulerSize + (stitchesPerPageX * pixelSize);
+                } else {
+                    sx = rulerSize + (startStitchX * pixelSize);
+                    sWidth = stitchesPerPageX * pixelSize;
+                }
+
+                // Y Calculations (Same as before)
+                if (r === 0) {
+                    sy = 0;
+                    sHeight = rulerSize + (stitchesPerPageY * pixelSize);
+                } else {
+                    sy = rulerSize + (startStitchY * pixelSize);
+                    sHeight = stitchesPerPageY * pixelSize;
+                }
+
+                // Handle edge clipping (Same as before)
+                if (sx + sWidth > canvas.width) sWidth = canvas.width - sx;
+                if (sy + sHeight > canvas.height) sHeight = canvas.height - sy;
+
+                // Create temp canvas (Same as before)
+                const tileCanvas = document.createElement('canvas');
+                tileCanvas.width = sWidth;
+                tileCanvas.height = sHeight;
+                const tileCtx = tileCanvas.getContext('2d');
+                tileCtx.drawImage(canvas, sx, sy, sWidth, sHeight, 0, 0, sWidth, sHeight);
+
+                const tileImgData = tileCanvas.toDataURL("image/png");
+
+                // ---  PRINT DIMENSIONS ---
+                const printW = sWidth * globalScale;
+                const printH = sHeight * globalScale;
+
+                // Page Numbering
+                doc.setFontSize(10);
+                doc.text(`Page ${r * cols + c + 1} (Row ${r + 1}, Col ${c + 1})`, margin, margin - 2);
+
+                // Add image using the fixed scale dimensions
+                doc.addImage(tileImgData, 'PNG', margin, margin, printW, printH);
+
+                // Draw cut lines/crop marks if the tile is smaller than the page
+                // This helps the user know where to cut if they are taping edge pieces.
+                if (printW < usableWidth || printH < usableHeight) {
+                    doc.setDrawColor(200); // Light grey
+                    doc.rect(margin, margin, printW, printH);
+                }
             }
-
-            // Y Calculations
-            if (r === 0) {
-                sy = 0;
-                sHeight = rulerSize + (stitchesPerPageY * pixelSize);
-            } else {
-                sy = rulerSize + (startStitchY * pixelSize);
-                sHeight = stitchesPerPageY * pixelSize;
-            }
-
-            // Handle the edge cases (last row/col might be smaller)
-            // Ensure we don't try to grab pixels that don't exist
-            if (sx + sWidth > canvas.width) sWidth = canvas.width - sx;
-            if (sy + sHeight > canvas.height) sHeight = canvas.height - sy;
-
-            // 2. Create a temporary canvas to hold just this slice
-            const tileCanvas = document.createElement('canvas');
-            tileCanvas.width = sWidth;
-            tileCanvas.height = sHeight;
-            const tileCtx = tileCanvas.getContext('2d');
-
-            // Draw the slice
-            tileCtx.drawImage(canvas, sx, sy, sWidth, sHeight, 0, 0, sWidth, sHeight);
-
-            // 3. Add to PDF
-            const tileImgData = tileCanvas.toDataURL("image/png");
-            
-            // Calculate aspect ratio to fit page
-            const tileRatio = sWidth / sHeight;
-            
-            let printW = usableWidth;
-            let printH = usableWidth / tileRatio;
-            
-            if (printH > usableHeight) {
-                printH = usableHeight;
-                printW = usableHeight * tileRatio;
-            }
-
-            doc.setFontSize(10);
-            doc.text(`Page ${r * cols + c + 1} (Row ${r+1}, Col ${c+1})`, margin, margin - 2);
-            doc.text(`Stitches: ${startStitchX}-${Math.min(startStitchX + stitchesPerPageX, totalGridWidth)} x ${startStitchY}-${Math.min(startStitchY + stitchesPerPageY, totalGridHeight)}`, margin, margin + printH + 5);
-
-            doc.addImage(tileImgData, 'PNG', margin, margin, printW, printH);
         }
     }
 
@@ -267,7 +275,6 @@ downloadBtn.addEventListener('click', async () => {
 
     doc.save("cross-stitch-pattern.pdf");
 });
-
 
 /* =========================================
    3. CORE APPLICATION LOGIC
