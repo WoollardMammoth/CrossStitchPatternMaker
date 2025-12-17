@@ -30,8 +30,21 @@ const ctx = canvas.getContext('2d');
 const keyContainer = document.getElementById('keyContainer');
 const colorKeyDiv = document.getElementById('colorKey');
 
+// Modal Elements
+const modal = document.getElementById('colorModal');
+const modalOptions = document.getElementById('modal-options');
+const closeModalBtn = document.querySelector('.close-modal');
+
 // State Variables
 let currentImage = new Image();
+
+// GLOBAL STATE for Pattern Data
+// We store these globally so we can redraw the pattern when a color is swapped
+let globalDmcPalette = [];      // The currently selected DMC colors
+let globalOriginalColors = [];  // The original RGB colors from the image (for matching)
+let globalIndexedData = [];     // The pixel map (0, 1, 2, 0, 1...)
+let globalGridWidth = 0;
+let globalGridHeight = 0;
 
 
 /* =========================================
@@ -54,9 +67,18 @@ processBtn.addEventListener('click', () => {
     generatePattern();
 });
 
-// --- UI Controls ---
+// --- Modal Controls ---
+closeModalBtn.addEventListener('click', () => {
+    modal.style.display = "none";
+});
 
-// Fit to Screen Toggle
+window.addEventListener('click', (event) => {
+    if (event.target == modal) {
+        modal.style.display = "none";
+    }
+});
+
+// --- UI Controls ---
 fitToggle.addEventListener('change', (e) => {
     if (e.target.checked) {
         canvas.classList.add('fit-screen');
@@ -65,22 +87,18 @@ fitToggle.addEventListener('change', (e) => {
     }
 });
 
-// Update Hoop Size Display
 hoopSizeSlider.addEventListener('input', (e) => {
     hoopValueDisplay.innerText = e.target.value + '"';
 });
 
-// Update Color Count Display
 colorCountSlider.addEventListener('input', (e) => {
     colorValueDisplay.innerText = e.target.value;
 });
 
-// Toggle URL vs Upload Input
 radioButtons.forEach(radio => {
     radio.addEventListener('change', (e) => {
         urlInput.style.display = 'none';
         fileInput.style.display = 'none';
-
         if (e.target.value === 'url') {
             urlInput.style.display = 'inline-block';
         } else if (e.target.value === 'upload') {
@@ -89,7 +107,6 @@ radioButtons.forEach(radio => {
     });
 });
 
-// Handle Aida Selection (Custom vs Preset)
 aidaSelect.addEventListener('change', (e) => {
     if (e.target.value === 'custom') {
         customAidaInput.style.display = 'inline-block';
@@ -99,11 +116,8 @@ aidaSelect.addEventListener('change', (e) => {
 });
 
 // --- Main Actions ---
-
-// Load Image Button
 loadImageBtn.addEventListener('click', () => {
     const source = document.querySelector('input[name="imgSource"]:checked').value;
-
     if (source === 'url') {
         const url = urlInput.value;
         if (url) {
@@ -125,7 +139,6 @@ loadImageBtn.addEventListener('click', () => {
     }
 });
 
-// Download PDF Button
 downloadBtn.addEventListener('click', async () => {
     if (canvas.width === 0) {
         alert("Please generate a pattern first.");
@@ -276,50 +289,45 @@ downloadBtn.addEventListener('click', async () => {
     doc.save("cross-stitch-pattern.pdf");
 });
 
+
 /* =========================================
    3. CORE APPLICATION LOGIC
    ========================================= */
 
-// Image Loaded Callback
 currentImage.onload = function () {
-    // Reset canvas size to image size for now
     canvas.width = currentImage.width;
     canvas.height = currentImage.height;
     ctx.drawImage(currentImage, 0, 0);
-    console.log("Image loaded!");
 };
 
-// Toggle Sidebar Helper
 function toggleSidebar() {
     sidebar.classList.toggle('open');
     document.body.classList.toggle('sidebar-open-body');
 }
 
-// Generate Pattern Logic
+/**
+ * PHASE 1: GENERATE DATA
+ * Processes the image, quantizes colors, and prepares data.
+ */
 function generatePattern() {
     const hoopSizeInches = parseInt(hoopSizeSlider.value);
-
-    // Get Aida count
     let aidaValue = parseInt(aidaSelect.value);
-    if (isNaN(aidaValue)) {
-        aidaValue = parseInt(customAidaInput.value);
-    }
+    if (isNaN(aidaValue)) aidaValue = parseInt(customAidaInput.value);
 
     // 1. Calculate Resolution
-    const gridWidth = hoopSizeInches * aidaValue;
+    globalGridWidth = hoopSizeInches * aidaValue;
     const aspectRatio = currentImage.height / currentImage.width;
-    const gridHeight = Math.floor(gridWidth * aspectRatio);
+    globalGridHeight = Math.floor(globalGridWidth * aspectRatio);
 
-    // SAVE GRID DIMENSIONS FOR PDF GENERATION
-    canvas.dataset.gridWidth = gridWidth;
-    canvas.dataset.gridHeight = gridHeight;
+    canvas.dataset.gridWidth = globalGridWidth;
+    canvas.dataset.gridHeight = globalGridHeight;
 
     // 2. Downsample
     const tempCanvas = document.createElement('canvas');
     const tempCtx = tempCanvas.getContext('2d');
-    tempCanvas.width = gridWidth;
-    tempCanvas.height = gridHeight;
-    tempCtx.drawImage(currentImage, 0, 0, gridWidth, gridHeight);
+    tempCanvas.width = globalGridWidth;
+    tempCanvas.height = globalGridHeight;
+    tempCtx.drawImage(currentImage, 0, 0, globalGridWidth, globalGridHeight);
 
     // --- Color Reduction ---
     const maxColors = parseInt(colorCountSlider.value);
@@ -327,33 +335,55 @@ function generatePattern() {
     const q = new RgbQuant(opts);
     q.sample(tempCanvas);
 
-    const palette = q.palette(); // Raw RGB(A) values
-    const indexedData = q.reduce(tempCanvas, 2); // Indexes
+    // 3. Store Original Quantized Colors (as array of [r,g,b])
+    globalOriginalColors = q.palette(true, true);
 
-    // We also need the colored visual for the background
-    const reducedRgbData = q.reduce(tempCanvas, 1);
-    const imgData = new ImageData(new Uint8ClampedArray(reducedRgbData), gridWidth, gridHeight);
-    tempCtx.putImageData(imgData, 0, 0);
+    // 4. Create Initial DMC Palette (Default to closest match)
+    // Map the original colors to the "best" match
+    globalDmcPalette = globalOriginalColors.map((color) => {
+        const matches = findTopDMCMatches(color[0], color[1], color[2], 1);
+        return matches[0]; // Take the single best match
+    });
 
-    // 3. Upscale for Display
+    // 5. Get Indexed Pixel Data
+    globalIndexedData = q.reduce(tempCanvas, 2);
+
+    // 6. Draw the Pattern using the calculated data
+    drawPattern();
+}
+
+/**
+ * PHASE 2: DRAW PATTERN
+ * Draws the pixels and symbols based on the current globalDmcPalette.
+ */
+function drawPattern() {
     const pixelSize = 15;
     const rulerSize = 30;
 
-    canvas.width = (gridWidth * pixelSize) + rulerSize;
-    canvas.height = (gridHeight * pixelSize) + rulerSize;
+    canvas.width = (globalGridWidth * pixelSize) + rulerSize;
+    canvas.height = (globalGridHeight * pixelSize) + rulerSize;
 
     // Fill background
     ctx.fillStyle = "white";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-
     ctx.imageSmoothingEnabled = false;
 
-    // Draw the colored squares (Background)
-    ctx.drawImage(
-        tempCanvas,
-        0, 0, gridWidth, gridHeight,
-        rulerSize, rulerSize, gridWidth * pixelSize, gridHeight * pixelSize
-    );
+    // --- DRAW PIXELS ---
+    for (let i = 0; i < globalIndexedData.length; i++) {
+        const x = i % globalGridWidth;
+        const y = Math.floor(i / globalGridWidth);
+        const colorIndex = globalIndexedData[i];
+        const dmc = globalDmcPalette[colorIndex];
+
+        if (dmc) {
+            ctx.fillStyle = `rgb(${dmc.r}, ${dmc.g}, ${dmc.b})`;
+            ctx.fillRect(
+                rulerSize + (x * pixelSize),
+                rulerSize + (y * pixelSize),
+                pixelSize, pixelSize
+            );
+        }
+    }
 
     // --- DRAW SYMBOLS ---
     const symbols = getSymbolSet();
@@ -361,42 +391,28 @@ function generatePattern() {
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
 
-    for (let i = 0; i < indexedData.length; i++) {
-        // Calculate Grid Coordinates
-        const x = i % gridWidth;
-        const y = Math.floor(i / gridWidth);
-
-        // Get the palette index for this pixel
-        const colorIndex = indexedData[i];
+    for (let i = 0; i < globalIndexedData.length; i++) {
+        const x = i % globalGridWidth;
+        const y = Math.floor(i / globalGridWidth);
+        const colorIndex = globalIndexedData[i];
+        const dmc = globalDmcPalette[colorIndex];
         const symbol = symbols[colorIndex];
 
-        // Get the RGB values
-        const pIdx = colorIndex * 4;
-        const r = palette[pIdx];
-        const g = palette[pIdx + 1];
-        const b = palette[pIdx + 2];
-        const a = palette[pIdx + 3];
-
-        if (a === 0) continue;
-
-        // Calculate screen position
         const screenX = rulerSize + (x * pixelSize) + (pixelSize / 2);
         const screenY = rulerSize + (y * pixelSize) + (pixelSize / 2);
 
-        // Set text color based on contrast
-        ctx.fillStyle = getContrastColor(r, g, b);
-
-        // Draw Symbol
-        ctx.fillText(symbol, screenX, screenY);
+        if (dmc) {
+            ctx.fillStyle = getContrastColor(dmc.r, dmc.g, dmc.b);
+            ctx.fillText(symbol, screenX, screenY);
+        }
     }
 
-    // 4. Draw Grid and Key
-    drawGrid(gridWidth, gridHeight, pixelSize, rulerSize);
-    generatePaletteDisplay(palette, symbols);
+    drawGrid(globalGridWidth, globalGridHeight, pixelSize, rulerSize);
+    generatePaletteDisplay(globalDmcPalette, symbols);
 
     document.getElementById('stats').innerText =
-        `Pattern Size: ${gridWidth} x ${gridHeight} stitches. \n` +
-        `Colors used: ${maxColors}`;
+        `Pattern Size: ${globalGridWidth} x ${globalGridHeight} stitches. \n` +
+        `Colors used: ${globalDmcPalette.length}`;
 }
 
 
@@ -410,91 +426,116 @@ function drawGrid(cols, rows, size, offset) {
     ctx.font = "10px monospace";
     ctx.fillStyle = "black";
 
-    // --- VERTICAL LINES & TOP NUMBERS ---
     for (let x = 0; x <= cols; x++) {
         const xPos = offset + (x * size);
         ctx.beginPath();
-
         if (x % 5 === 0) {
             ctx.strokeStyle = "rgba(0, 0, 0, 0.8)";
             ctx.lineWidth = 1.5;
-            if (x < cols) {
-                ctx.fillText(x, xPos, offset / 2);
-            }
+            if (x < cols) ctx.fillText(x, xPos, offset / 2);
         } else {
             ctx.strokeStyle = "rgba(128, 128, 128, 0.5)";
             ctx.lineWidth = 0.5;
         }
-
         ctx.moveTo(xPos, offset);
         ctx.lineTo(xPos, offset + (rows * size));
         ctx.stroke();
     }
 
-    // --- HORIZONTAL LINES & LEFT NUMBERS ---
     for (let y = 0; y <= rows; y++) {
         const yPos = offset + (y * size);
         ctx.beginPath();
-
         if (y % 5 === 0) {
             ctx.strokeStyle = "rgba(0, 0, 0, 0.8)";
             ctx.lineWidth = 1.5;
-            if (y < rows) {
-                ctx.fillText(y, offset / 2, yPos);
-            }
+            if (y < rows) ctx.fillText(y, offset / 2, yPos);
         } else {
             ctx.strokeStyle = "rgba(128, 128, 128, 0.5)";
             ctx.lineWidth = 0.5;
         }
-
         ctx.moveTo(offset, yPos);
         ctx.lineTo(offset + (cols * size), yPos);
         ctx.stroke();
     }
 }
 
-function generatePaletteDisplay(palette, symbols) {
+/**
+ * Generates the Interactive Legend
+ */
+function generatePaletteDisplay(dmcPalette, symbols) {
     colorKeyDiv.innerHTML = '';
     keyContainer.style.display = 'block';
 
-    const step = (palette.length % 4 === 0) ? 4 : 3;
-    let colorIndex = 0;
+    dmcPalette.forEach((dmc, index) => {
+        if (!dmc) return;
 
-    for (let i = 0; i < palette.length; i += step) {
-        const r = palette[i];
-        const g = palette[i + 1];
-        const b = palette[i + 2];
-
-        if (step === 4 && palette[i + 3] === 0) {
-            colorIndex++;
-            continue;
-        }
-
-        const hex = rgbToHex(r, g, b);
-        const rgbString = `rgb(${r}, ${g}, ${b})`;
-        const symbol = symbols[colorIndex];
-        const textColor = getContrastColor(r, g, b);
+        const rgbString = `rgb(${dmc.r}, ${dmc.g}, ${dmc.b})`;
+        const symbol = symbols[index];
+        const textColor = getContrastColor(dmc.r, dmc.g, dmc.b);
 
         const swatch = document.createElement('div');
         swatch.className = 'color-swatch';
+        swatch.style.cursor = "pointer"; // Show it's clickable
+        swatch.title = "Click to swap color";
 
         swatch.innerHTML = `
             <div class="swatch-box" style="background-color: ${rgbString}; color: ${textColor}; display: flex; align-items: center; justify-content: center;">
                 ${symbol}
             </div>
             <div class="color-info">
-                <strong>${hex}</strong><br>
-                Symbol: ${symbol}
+                <strong>DMC ${dmc.floss}</strong><br>
+                ${dmc.name}
             </div>
         `;
 
+        // CLICK HANDLER: Open the Swap Modal
+        swatch.onclick = () => {
+            openColorSwapModal(index);
+        };
+
         colorKeyDiv.appendChild(swatch);
-        colorIndex++;
-    }
+    });
 }
 
-function rgbToHex(r, g, b) {
-    return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1).toUpperCase();
+function openColorSwapModal(paletteIndex) {
+    modal.style.display = "flex";
+    modalOptions.innerHTML = "<p>Finding close matches...</p>";
+
+    // Get the original color that generated this palette entry
+    const originalColor = globalOriginalColors[paletteIndex];
+
+    // Find top 10 matches
+    const matches = findTopDMCMatches(originalColor[0], originalColor[1], originalColor[2], 10);
+
+    modalOptions.innerHTML = ""; // Clear loading text
+
+    matches.forEach(match => {
+        const option = document.createElement('div');
+        option.className = "color-option";
+
+        const isSelected = (match.floss === globalDmcPalette[paletteIndex].floss);
+        if (isSelected) option.style.backgroundColor = "#e6f7ff"; // Highlight current selection
+
+        option.innerHTML = `
+            <div class="color-option-swatch" style="background-color: rgb(${match.r}, ${match.g}, ${match.b})"></div>
+            <div>
+                <strong>DMC ${match.floss}</strong> - ${match.name}
+            </div>
+        `;
+
+        option.onclick = () => {
+            // Update the global palette
+            globalDmcPalette[paletteIndex] = match;
+
+            // Redraw everything
+            drawPattern();
+
+            // Close modal
+            modal.style.display = "none";
+        };
+
+        modalOptions.appendChild(option);
+    });
 }
 
 function getContrastColor(r, g, b) {
@@ -517,4 +558,53 @@ function getSymbolSet() {
         // Backups
         'A', 'B', 'D', 'E', 'F', 'G', 'K', 'L', 'P', 'R'
     ];
+}
+
+/* =========================================
+   5. COLOR MATCHING LOGIC (With Top-N Support)
+   ========================================= */
+
+function findTopDMCMatches(r, g, b, count = 5) {
+    const targetLab = rgbToLab(r, g, b);
+
+    // Calculate distance for ALL colors
+    const results = dmcColors.map(dmc => {
+        const dmcLab = rgbToLab(dmc.r, dmc.g, dmc.b);
+        const dL = targetLab.L - dmcLab.L;
+        const da = targetLab.a - dmcLab.a;
+        const db = targetLab.b - dmcLab.b;
+        const distance = Math.sqrt((dL * dL) + (da * da) + (db * db));
+
+        return { dmc: dmc, distance: distance };
+    });
+
+    // Sort by smallest distance
+    results.sort((a, b) => a.distance - b.distance);
+
+    // Return the top N colors (stripping out the distance property)
+    return results.slice(0, count).map(res => res.dmc);
+}
+
+function rgbToLab(r, g, b) {
+    let r_ = r / 255, g_ = g / 255, b_ = b / 255;
+    if (r_ > 0.04045) r_ = Math.pow((r_ + 0.055) / 1.055, 2.4); else r_ = r_ / 12.92;
+    if (g_ > 0.04045) g_ = Math.pow((g_ + 0.055) / 1.055, 2.4); else g_ = g_ / 12.92;
+    if (b_ > 0.04045) b_ = Math.pow((b_ + 0.055) / 1.055, 2.4); else b_ = b_ / 12.92;
+    r_ *= 100; g_ *= 100; b_ *= 100;
+    const x = r_ * 0.4124 + g_ * 0.3576 + b_ * 0.1805;
+    const y = r_ * 0.2126 + g_ * 0.7152 + b_ * 0.0722;
+    const z = r_ * 0.0193 + g_ * 0.1192 + b_ * 0.9505;
+    return xyzToLab(x, y, z);
+}
+
+function xyzToLab(x, y, z) {
+    const refX = 95.047, refY = 100.000, refZ = 108.883;
+    let x_ = x / refX, y_ = y / refY, z_ = z / refZ;
+    if (x_ > 0.008856) x_ = Math.pow(x_, 1 / 3); else x_ = (7.787 * x_) + (16 / 116);
+    if (y_ > 0.008856) y_ = Math.pow(y_, 1 / 3); else y_ = (7.787 * y_) + (16 / 116);
+    if (z_ > 0.008856) z_ = Math.pow(z_, 1 / 3); else z_ = (7.787 * z_) + (16 / 116);
+    const L = (116 * y_) - 16;
+    const a = 500 * (x_ - y_);
+    const b = 200 * (y_ - z_);
+    return { L, a, b };
 }
