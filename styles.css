@@ -199,3 +199,63 @@ canvas.fit-screen {
     object-fit: contain;
     width: auto;
 }
+
+/* --- MODAL STYLES --- */
+.modal {
+    position: fixed;
+    z-index: 2000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0,0,0,0.5); /* Black background with opacity */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.modal-content {
+    background-color: #fdfaf3;
+    border: 4px ridge #c3a79d;
+    padding: 20px;
+    width: 350px;
+    max-width: 90%;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 2px dashed #c3a79d;
+    margin-bottom: 15px;
+    padding-bottom: 10px;
+}
+
+.close-modal {
+    color: #8B4513;
+    font-size: 28px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.color-option {
+    display: flex;
+    align-items: center;
+    padding: 10px;
+    border: 1px solid #ddd;
+    margin-bottom: 5px;
+    cursor: pointer;
+    background: white;
+}
+
+.color-option:hover {
+    background-color: #eee;
+}
+
+.color-option-swatch {
+    width: 30px;
+    height: 30px;
+    border: 1px solid #999;
+    margin-right: 15px;
+}
