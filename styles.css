@@ -129,13 +129,48 @@ h2, h3 {
 
 /* --- FORM ELEMENTS --- */
 .control-group {
-    margin-bottom: 25px;
+    margin-bottom: 15px;
     border-bottom: 2px dashed #c3a79d;
     padding-bottom: 15px;
 }
 
+details.control-group summary {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    user-select: none;
+}
+
+details.control-group summary::-webkit-details-marker {
+    display: none;
+}
+
+details.control-group summary::after {
+    content: "▼";
+    color: #8B4513;
+    font-size: 0.8rem;
+    transition: transform 0.2s;
+}
+
+details.control-group[open] summary::after {
+    transform: rotate(180deg);
+}
+
+.details-content {
+    padding-top: 15px;
+    animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-5px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
 h3 {
     margin-top: 0;
+    margin-bottom: 0;
     font-size: 1.2rem;
     text-transform: uppercase;
     letter-spacing: 1px;
