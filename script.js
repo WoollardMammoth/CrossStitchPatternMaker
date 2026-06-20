@@ -7,6 +7,7 @@ const sidebar = document.getElementById('sidebar');
 const openBtn = document.getElementById('sidebarToggle');
 const closeBtn = document.getElementById('closeSidebar');
 const fitToggle = document.getElementById('fitToScreenToggle');
+const clearSelectionBtn = document.getElementById('clearSelectionBtn');
 
 // Input Controls
 const hoopSizeSlider = document.getElementById('hoopSize');
@@ -17,6 +18,10 @@ const aidaSelect = document.getElementById('aidaCount');
 const customAidaInput = document.getElementById('customAida');
 const urlInput = document.getElementById('urlInput');
 const fileInput = document.getElementById('fileInput');
+const saturationSlider = document.getElementById('saturation');
+const contrastSlider = document.getElementById('contrast');
+const satValueDisplay = document.getElementById('satValue');
+const conValueDisplay = document.getElementById('conValue');
 const radioButtons = document.getElementsByName('imgSource');
 
 // Action Buttons
@@ -45,6 +50,10 @@ let globalOriginalColors = [];  // The original RGB colors from the image (for m
 let globalIndexedData = [];     // The pixel map (0, 1, 2, 0, 1...)
 let globalGridWidth = 0;
 let globalGridHeight = 0;
+
+let globalSelectedCells = new Set();
+let isDraggingSelection = false;
+let dragMode = 'add';
 
 
 /* =========================================
@@ -79,6 +88,80 @@ window.addEventListener('click', (event) => {
 });
 
 // --- UI Controls ---
+clearSelectionBtn.addEventListener('click', () => {
+    globalSelectedCells.clear();
+    drawPattern();
+});
+
+window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && globalSelectedCells.size > 0) {
+        globalSelectedCells.clear();
+        drawPattern();
+    }
+});
+
+function getGridIndexFromEvent(e) {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const xRaw = (e.clientX - rect.left) * scaleX;
+    const yRaw = (e.clientY - rect.top) * scaleY;
+    const pixelSize = 15;
+    const rulerSize = 30;
+    
+    if (xRaw < rulerSize || yRaw < rulerSize) return null;
+    
+    const gridX = Math.floor((xRaw - rulerSize) / pixelSize);
+    const gridY = Math.floor((yRaw - rulerSize) / pixelSize);
+    
+    if (gridX >= 0 && gridX < globalGridWidth && gridY >= 0 && gridY < globalGridHeight) {
+        return gridY * globalGridWidth + gridX;
+    }
+    return null;
+}
+
+canvas.addEventListener('mousedown', (e) => {
+    if (globalIndexedData.length === 0) return;
+    isDraggingSelection = true;
+    const index = getGridIndexFromEvent(e);
+    if (index !== null) {
+        if (globalSelectedCells.has(index)) {
+            dragMode = 'remove';
+            globalSelectedCells.delete(index);
+        } else {
+            dragMode = 'add';
+            globalSelectedCells.add(index);
+        }
+        drawCell(index);
+    }
+});
+
+canvas.addEventListener('mousemove', (e) => {
+    if (!isDraggingSelection) return;
+    const index = getGridIndexFromEvent(e);
+    if (index !== null) {
+        let changed = false;
+        if (dragMode === 'add') {
+            if (!globalSelectedCells.has(index)) {
+                globalSelectedCells.add(index);
+                changed = true;
+            }
+        } else if (dragMode === 'remove') {
+            if (globalSelectedCells.has(index)) {
+                globalSelectedCells.delete(index);
+                changed = true;
+            }
+        }
+        if (changed) {
+            drawCell(index);
+        }
+    }
+});
+
+window.addEventListener('mouseup', () => {
+    isDraggingSelection = false;
+});
+
 fitToggle.addEventListener('change', (e) => {
     if (e.target.checked) {
         canvas.classList.add('fit-screen');
@@ -93,6 +176,14 @@ hoopSizeSlider.addEventListener('input', (e) => {
 
 colorCountSlider.addEventListener('input', (e) => {
     colorValueDisplay.innerText = e.target.value;
+});
+
+saturationSlider.addEventListener('input', (e) => {
+    satValueDisplay.innerText = e.target.value + '%';
+});
+
+contrastSlider.addEventListener('input', (e) => {
+    conValueDisplay.innerText = e.target.value + '%';
 });
 
 radioButtons.forEach(radio => {
@@ -327,6 +418,12 @@ function generatePattern() {
     const tempCtx = tempCanvas.getContext('2d');
     tempCanvas.width = globalGridWidth;
     tempCanvas.height = globalGridHeight;
+    
+    // Apply user filters to preserve vivid colors
+    const sat = saturationSlider.value;
+    const con = contrastSlider.value;
+    tempCtx.filter = `saturate(${sat}%) contrast(${con}%)`;
+    
     tempCtx.drawImage(currentImage, 0, 0, globalGridWidth, globalGridHeight);
 
     // --- Color Reduction ---
@@ -338,15 +435,100 @@ function generatePattern() {
     // 3. Store Original Quantized Colors (as array of [r,g,b])
     globalOriginalColors = q.palette(true, true);
 
-    // 4. Create Initial DMC Palette (Default to closest match)
-    // Map the original colors to the "best" match
-    globalDmcPalette = globalOriginalColors.map((color) => {
-        const matches = findTopDMCMatches(color[0], color[1], color[2], 1);
-        return matches[0]; // Take the single best match
+    // 4. Create Initial DMC Palette (Deduplicated)
+    globalDmcPalette = [];
+    const usedFlosses = new Set();
+    
+    globalOriginalColors.forEach(color => {
+        // Request enough matches to find an unused one
+        const matches = findTopDMCMatches(color[0], color[1], color[2], 50);
+        let bestMatch = matches.find(m => !usedFlosses.has(m.floss));
+        if (!bestMatch) bestMatch = matches[0]; // Fallback if all 50 are used
+        
+        usedFlosses.add(bestMatch.floss);
+        globalDmcPalette.push(bestMatch);
     });
 
-    // 5. Get Indexed Pixel Data
-    globalIndexedData = q.reduce(tempCanvas, 2);
+    // 5. Get Indexed Pixel Data (Per-Pixel CIELAB Mapping)
+    const imgData = tempCtx.getImageData(0, 0, globalGridWidth, globalGridHeight).data;
+    globalIndexedData = new Array(globalGridWidth * globalGridHeight);
+    
+    const paletteLab = globalDmcPalette.map(dmc => rgbToLab(dmc.r, dmc.g, dmc.b));
+    const colorCache = new Map();
+    
+    function getBestIndex(r, g, b) {
+        const rgbKey = r | (g << 8) | (b << 16);
+        let bestIndex = colorCache.get(rgbKey);
+        if (bestIndex === undefined) {
+            const pixelLab = rgbToLab(r, g, b);
+            let minDistance = Infinity;
+            bestIndex = 0;
+            for (let p = 0; p < paletteLab.length; p++) {
+                const pLab = paletteLab[p];
+                const dL = pixelLab.L - pLab.L;
+                const da = pixelLab.a - pLab.a;
+                const db = pixelLab.b - pLab.b;
+                const dist = (dL * dL) + (da * da) + (db * db);
+                if (dist < minDistance) {
+                    minDistance = dist;
+                    bestIndex = p;
+                }
+            }
+            colorCache.set(rgbKey, bestIndex);
+        }
+        return bestIndex;
+    }
+
+    const advancedStitching = document.getElementById('advancedStitching').checked;
+    let imgData2x = null;
+    if (advancedStitching) {
+        const tempCanvas2x = document.createElement('canvas');
+        tempCanvas2x.width = globalGridWidth * 2;
+        tempCanvas2x.height = globalGridHeight * 2;
+        const tempCtx2x = tempCanvas2x.getContext('2d');
+        const sat = document.getElementById('saturation').value;
+        const con = document.getElementById('contrast').value;
+        tempCtx2x.filter = `saturate(${sat}%) contrast(${con}%)`;
+        tempCtx2x.drawImage(currentImage, 0, 0, globalGridWidth * 2, globalGridHeight * 2);
+        imgData2x = tempCtx2x.getImageData(0, 0, globalGridWidth * 2, globalGridHeight * 2).data;
+    }
+
+    for (let y = 0; y < globalGridHeight; y++) {
+        for (let x = 0; x < globalGridWidth; x++) {
+            const i1x = (y * globalGridWidth + x) * 4;
+            const r = imgData[i1x], g = imgData[i1x + 1], b = imgData[i1x + 2];
+            let cellData = getBestIndex(r, g, b); // default solid
+            
+            if (advancedStitching) {
+                const idx0 = ((y*2) * (globalGridWidth*2) + (x*2)) * 4;
+                const idx1 = ((y*2) * (globalGridWidth*2) + (x*2 + 1)) * 4;
+                const idx2 = ((y*2 + 1) * (globalGridWidth*2) + (x*2)) * 4;
+                const idx3 = ((y*2 + 1) * (globalGridWidth*2) + (x*2 + 1)) * 4;
+                
+                const i0 = getBestIndex(imgData2x[idx0], imgData2x[idx0+1], imgData2x[idx0+2]);
+                const i1 = getBestIndex(imgData2x[idx1], imgData2x[idx1+1], imgData2x[idx1+2]);
+                const i2 = getBestIndex(imgData2x[idx2], imgData2x[idx2+1], imgData2x[idx2+2]);
+                const i3 = getBestIndex(imgData2x[idx3], imgData2x[idx3+1], imgData2x[idx3+2]);
+                
+                if (i0 === i1 && i2 === i3 && i0 !== i2) {
+                    cellData = { type: 'horizontal', c1: i0, c2: i2 };
+                } else if (i0 === i2 && i1 === i3 && i0 !== i1) {
+                    cellData = { type: 'vertical', c1: i0, c2: i1 };
+                } else if (i0 === i1 && i0 === i2 && i0 !== i3) {
+                    cellData = { type: 'diagonal_slash', c1: i0, c2: i3 }; // TL vs BR
+                } else if (i1 === i3 && i2 === i3 && i0 !== i3) {
+                    cellData = { type: 'diagonal_slash', c1: i0, c2: i3 };
+                } else if (i0 === i1 && i0 === i3 && i0 !== i2) {
+                    cellData = { type: 'diagonal_backslash', c1: i0, c2: i2 }; // TR vs BL
+                } else if (i0 === i2 && i0 === i3 && i0 !== i1) {
+                    cellData = { type: 'diagonal_backslash', c1: i1, c2: i0 };
+                }
+            }
+            globalIndexedData[y * globalGridWidth + x] = cellData;
+        }
+    }
+
+    globalSelectedCells.clear();
 
     // 6. Draw the Pattern using the calculated data
     drawPattern();
@@ -368,46 +550,39 @@ function drawPattern() {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.imageSmoothingEnabled = false;
 
-    // --- DRAW PIXELS ---
+    const symbols = getSymbolSet();
     for (let i = 0; i < globalIndexedData.length; i++) {
         const x = i % globalGridWidth;
         const y = Math.floor(i / globalGridWidth);
-        const colorIndex = globalIndexedData[i];
-        const dmc = globalDmcPalette[colorIndex];
+        const cellData = globalIndexedData[i];
+        drawCellInterior(ctx, x, y, cellData, pixelSize, rulerSize, symbols);
+    }
 
-        if (dmc) {
-            ctx.fillStyle = `rgb(${dmc.r}, ${dmc.g}, ${dmc.b})`;
+    drawGrid(globalGridWidth, globalGridHeight, pixelSize, rulerSize);
+
+    if (globalSelectedCells.size > 0) {
+        ctx.fillStyle = "rgba(0, 150, 255, 0.4)";
+        ctx.strokeStyle = "blue";
+        ctx.lineWidth = 2;
+        for (let index of globalSelectedCells) {
+            const x = index % globalGridWidth;
+            const y = Math.floor(index / globalGridWidth);
             ctx.fillRect(
                 rulerSize + (x * pixelSize),
                 rulerSize + (y * pixelSize),
                 pixelSize, pixelSize
             );
+            ctx.strokeRect(
+                rulerSize + (x * pixelSize),
+                rulerSize + (y * pixelSize),
+                pixelSize, pixelSize
+            );
         }
+        clearSelectionBtn.style.display = 'inline-block';
+    } else {
+        if (clearSelectionBtn) clearSelectionBtn.style.display = 'none';
     }
 
-    // --- DRAW SYMBOLS ---
-    const symbols = getSymbolSet();
-    ctx.font = `${Math.floor(pixelSize * 0.7)}px sans-serif`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-
-    for (let i = 0; i < globalIndexedData.length; i++) {
-        const x = i % globalGridWidth;
-        const y = Math.floor(i / globalGridWidth);
-        const colorIndex = globalIndexedData[i];
-        const dmc = globalDmcPalette[colorIndex];
-        const symbol = symbols[colorIndex];
-
-        const screenX = rulerSize + (x * pixelSize) + (pixelSize / 2);
-        const screenY = rulerSize + (y * pixelSize) + (pixelSize / 2);
-
-        if (dmc) {
-            ctx.fillStyle = getContrastColor(dmc.r, dmc.g, dmc.b);
-            ctx.fillText(symbol, screenX, screenY);
-        }
-    }
-
-    drawGrid(globalGridWidth, globalGridHeight, pixelSize, rulerSize);
     generatePaletteDisplay(globalDmcPalette, symbols);
 
     document.getElementById('stats').innerText =
@@ -419,6 +594,72 @@ function drawPattern() {
 /* =========================================
    4. HELPER FUNCTIONS
    ========================================= */
+
+function drawCellInterior(canvasCtx, x, y, cellData, pixelSize, rulerSize, symbols) {
+    const cx = rulerSize + (x * pixelSize);
+    const cy = rulerSize + (y * pixelSize);
+
+    if (typeof cellData === 'number') {
+        const dmc = globalDmcPalette[cellData];
+        if (!dmc) return;
+        canvasCtx.fillStyle = `rgb(${dmc.r}, ${dmc.g}, ${dmc.b})`;
+        canvasCtx.fillRect(cx, cy, pixelSize, pixelSize);
+        
+        canvasCtx.font = `${Math.floor(pixelSize * 0.7)}px sans-serif`;
+        canvasCtx.textAlign = "center";
+        canvasCtx.textBaseline = "middle";
+        canvasCtx.fillStyle = getContrastColor(dmc.r, dmc.g, dmc.b);
+        canvasCtx.fillText(symbols[cellData], cx + pixelSize / 2, cy + pixelSize / 2);
+    } else {
+        const dmc1 = globalDmcPalette[cellData.c1];
+        const dmc2 = globalDmcPalette[cellData.c2];
+        if (!dmc1 || !dmc2) return;
+        
+        if (cellData.type === 'horizontal') {
+            canvasCtx.fillStyle = `rgb(${dmc1.r}, ${dmc1.g}, ${dmc1.b})`;
+            canvasCtx.fillRect(cx, cy, pixelSize, pixelSize/2);
+            canvasCtx.fillStyle = `rgb(${dmc2.r}, ${dmc2.g}, ${dmc2.b})`;
+            canvasCtx.fillRect(cx, cy + pixelSize/2, pixelSize, pixelSize/2);
+        } else if (cellData.type === 'vertical') {
+            canvasCtx.fillStyle = `rgb(${dmc1.r}, ${dmc1.g}, ${dmc1.b})`;
+            canvasCtx.fillRect(cx, cy, pixelSize/2, pixelSize);
+            canvasCtx.fillStyle = `rgb(${dmc2.r}, ${dmc2.g}, ${dmc2.b})`;
+            canvasCtx.fillRect(cx + pixelSize/2, cy, pixelSize/2, pixelSize);
+        } else if (cellData.type === 'diagonal_backslash') { // TR vs BL
+            canvasCtx.fillStyle = `rgb(${dmc1.r}, ${dmc1.g}, ${dmc1.b})`;
+            canvasCtx.beginPath(); canvasCtx.moveTo(cx, cy); canvasCtx.lineTo(cx + pixelSize, cy); canvasCtx.lineTo(cx + pixelSize, cy + pixelSize); canvasCtx.fill();
+            canvasCtx.fillStyle = `rgb(${dmc2.r}, ${dmc2.g}, ${dmc2.b})`;
+            canvasCtx.beginPath(); canvasCtx.moveTo(cx, cy); canvasCtx.lineTo(cx, cy + pixelSize); canvasCtx.lineTo(cx + pixelSize, cy + pixelSize); canvasCtx.fill();
+        } else if (cellData.type === 'diagonal_slash') { // TL vs BR
+            canvasCtx.fillStyle = `rgb(${dmc1.r}, ${dmc1.g}, ${dmc1.b})`;
+            canvasCtx.beginPath(); canvasCtx.moveTo(cx, cy); canvasCtx.lineTo(cx + pixelSize, cy); canvasCtx.lineTo(cx, cy + pixelSize); canvasCtx.fill();
+            canvasCtx.fillStyle = `rgb(${dmc2.r}, ${dmc2.g}, ${dmc2.b})`;
+            canvasCtx.beginPath(); canvasCtx.moveTo(cx + pixelSize, cy); canvasCtx.lineTo(cx + pixelSize, cy + pixelSize); canvasCtx.lineTo(cx, cy + pixelSize); canvasCtx.fill();
+        }
+        
+        canvasCtx.font = `${Math.floor(pixelSize * 0.45)}px sans-serif`;
+        canvasCtx.textAlign = "center";
+        canvasCtx.textBaseline = "middle";
+        const sym1 = symbols[cellData.c1];
+        const sym2 = symbols[cellData.c2];
+        const col1 = getContrastColor(dmc1.r, dmc1.g, dmc1.b);
+        const col2 = getContrastColor(dmc2.r, dmc2.g, dmc2.b);
+        
+        if (cellData.type === 'horizontal') {
+            canvasCtx.fillStyle = col1; canvasCtx.fillText(sym1, cx + pixelSize/2, cy + pixelSize/4);
+            canvasCtx.fillStyle = col2; canvasCtx.fillText(sym2, cx + pixelSize/2, cy + 3*pixelSize/4);
+        } else if (cellData.type === 'vertical') {
+            canvasCtx.fillStyle = col1; canvasCtx.fillText(sym1, cx + pixelSize/4, cy + pixelSize/2);
+            canvasCtx.fillStyle = col2; canvasCtx.fillText(sym2, cx + 3*pixelSize/4, cy + pixelSize/2);
+        } else if (cellData.type === 'diagonal_backslash') {
+            canvasCtx.fillStyle = col1; canvasCtx.fillText(sym1, cx + 3*pixelSize/4, cy + pixelSize/4);
+            canvasCtx.fillStyle = col2; canvasCtx.fillText(sym2, cx + pixelSize/4, cy + 3*pixelSize/4);
+        } else if (cellData.type === 'diagonal_slash') {
+            canvasCtx.fillStyle = col1; canvasCtx.fillText(sym1, cx + pixelSize/4, cy + pixelSize/4);
+            canvasCtx.fillStyle = col2; canvasCtx.fillText(sym2, cx + 3*pixelSize/4, cy + 3*pixelSize/4);
+        }
+    }
+}
 
 function drawGrid(cols, rows, size, offset) {
     ctx.textBaseline = 'middle';
@@ -459,6 +700,93 @@ function drawGrid(cols, rows, size, offset) {
     }
 }
 
+function drawCell(index) {
+    const pixelSize = 15;
+    const rulerSize = 30;
+    
+    const x = index % globalGridWidth;
+    const y = Math.floor(index / globalGridWidth);
+    
+    const cellData = globalIndexedData[index];
+    const symbols = getSymbolSet();
+    
+    // Clear area (slightly larger to catch borders if any issues)
+    ctx.clearRect(
+        rulerSize + (x * pixelSize) - 1,
+        rulerSize + (y * pixelSize) - 1,
+        pixelSize + 2, pixelSize + 2
+    );
+    
+    // Fill background for cleared area just in case
+    ctx.fillStyle = "white";
+    ctx.fillRect(
+        rulerSize + (x * pixelSize),
+        rulerSize + (y * pixelSize),
+        pixelSize, pixelSize
+    );
+    
+    drawCellInterior(ctx, x, y, cellData, pixelSize, rulerSize, symbols);
+    
+    // Draw selection highlight if selected
+    if (globalSelectedCells.has(index)) {
+        ctx.fillStyle = "rgba(0, 150, 255, 0.4)";
+        ctx.strokeStyle = "blue";
+        ctx.lineWidth = 2;
+        ctx.fillRect(
+            rulerSize + (x * pixelSize),
+            rulerSize + (y * pixelSize),
+            pixelSize, pixelSize
+        );
+        ctx.strokeRect(
+            rulerSize + (x * pixelSize),
+            rulerSize + (y * pixelSize),
+            pixelSize, pixelSize
+        );
+    }
+    
+    // Redraw the grid lines around it
+    ctx.beginPath();
+    ctx.strokeStyle = "rgba(128, 128, 128, 0.5)";
+    ctx.lineWidth = 0.5;
+    ctx.moveTo(rulerSize + (x * pixelSize), rulerSize + (y * pixelSize));
+    ctx.lineTo(rulerSize + (x * pixelSize), rulerSize + ((y + 1) * pixelSize));
+    ctx.moveTo(rulerSize + ((x + 1) * pixelSize), rulerSize + (y * pixelSize));
+    ctx.lineTo(rulerSize + ((x + 1) * pixelSize), rulerSize + ((y + 1) * pixelSize));
+    ctx.moveTo(rulerSize + (x * pixelSize), rulerSize + (y * pixelSize));
+    ctx.lineTo(rulerSize + ((x + 1) * pixelSize), rulerSize + (y * pixelSize));
+    ctx.moveTo(rulerSize + (x * pixelSize), rulerSize + ((y + 1) * pixelSize));
+    ctx.lineTo(rulerSize + ((x + 1) * pixelSize), rulerSize + ((y + 1) * pixelSize));
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.8)";
+    ctx.lineWidth = 1.5;
+    if (x % 5 === 0) {
+        ctx.moveTo(rulerSize + (x * pixelSize), rulerSize + (y * pixelSize));
+        ctx.lineTo(rulerSize + (x * pixelSize), rulerSize + ((y + 1) * pixelSize));
+    }
+    if ((x + 1) % 5 === 0) {
+        ctx.moveTo(rulerSize + ((x + 1) * pixelSize), rulerSize + (y * pixelSize));
+        ctx.lineTo(rulerSize + ((x + 1) * pixelSize), rulerSize + ((y + 1) * pixelSize));
+    }
+    if (y % 5 === 0) {
+        ctx.moveTo(rulerSize + (x * pixelSize), rulerSize + (y * pixelSize));
+        ctx.lineTo(rulerSize + ((x + 1) * pixelSize), rulerSize + (y * pixelSize));
+    }
+    if ((y + 1) % 5 === 0) {
+        ctx.moveTo(rulerSize + (x * pixelSize), rulerSize + ((y + 1) * pixelSize));
+        ctx.lineTo(rulerSize + ((x + 1) * pixelSize), rulerSize + ((y + 1) * pixelSize));
+    }
+    ctx.stroke();
+    
+    // Ensure the clear button state is correct
+    if (globalSelectedCells.size > 0) {
+        clearSelectionBtn.style.display = 'inline-block';
+    } else {
+        clearSelectionBtn.style.display = 'none';
+    }
+}
+
 /**
  * Generates the Interactive Legend
  */
@@ -488,9 +816,18 @@ function generatePaletteDisplay(dmcPalette, symbols) {
             </div>
         `;
 
-        // CLICK HANDLER: Open the Swap Modal
+        // CLICK HANDLER: Open the Swap Modal or apply color to selection
         swatch.onclick = () => {
-            openColorSwapModal(index);
+            if (globalSelectedCells.size > 0) {
+                // Apply this color to selected cells
+                for (let cellIndex of globalSelectedCells) {
+                    globalIndexedData[cellIndex] = index;
+                }
+                globalSelectedCells.clear();
+                drawPattern();
+            } else {
+                openColorSwapModal(index);
+            }
         };
 
         colorKeyDiv.appendChild(swatch);
@@ -499,43 +836,66 @@ function generatePaletteDisplay(dmcPalette, symbols) {
 
 function openColorSwapModal(paletteIndex) {
     modal.style.display = "flex";
-    modalOptions.innerHTML = "<p>Finding close matches...</p>";
+    
+    modalOptions.innerHTML = `
+        <input type="text" id="colorSearch" placeholder="Search DMC by name or number..." style="width: 100%; margin-bottom: 10px; padding: 8px; box-sizing: border-box; font-family: 'DotGothic16', sans-serif;">
+        <div id="colorList" style="max-height: 350px; overflow-y: auto; padding-right: 5px;"></div>
+    `;
 
-    // Get the original color that generated this palette entry
+    const colorSearch = document.getElementById('colorSearch');
+    const colorList = document.getElementById('colorList');
+    
     const originalColor = globalOriginalColors[paletteIndex];
+    
+    // Get all colors sorted by distance to the original color
+    const matches = findTopDMCMatches(originalColor[0], originalColor[1], originalColor[2], dmcColors.length);
 
-    // Find top 10 matches
-    const matches = findTopDMCMatches(originalColor[0], originalColor[1], originalColor[2], 10);
+    function renderColors(filterText = "") {
+        colorList.innerHTML = "";
+        const lowerFilter = filterText.toLowerCase();
+        
+        let displayColors = matches;
+        if (filterText) {
+            displayColors = matches.filter(c => 
+                c.floss.toString().includes(lowerFilter) || 
+                c.name.toLowerCase().includes(lowerFilter)
+            );
+        }
+        
+        displayColors.forEach(match => {
+            const option = document.createElement('div');
+            option.className = "color-option";
 
-    modalOptions.innerHTML = ""; // Clear loading text
+            const isSelected = (match.floss === globalDmcPalette[paletteIndex].floss);
+            if (isSelected) option.style.backgroundColor = "#e6f7ff";
 
-    matches.forEach(match => {
-        const option = document.createElement('div');
-        option.className = "color-option";
+            option.innerHTML = `
+                <div class="color-option-swatch" style="background-color: rgb(${match.r}, ${match.g}, ${match.b})"></div>
+                <div>
+                    <strong>DMC ${match.floss}</strong> - ${match.name}
+                </div>
+            `;
 
-        const isSelected = (match.floss === globalDmcPalette[paletteIndex].floss);
-        if (isSelected) option.style.backgroundColor = "#e6f7ff"; // Highlight current selection
+            option.onclick = () => {
+                globalDmcPalette[paletteIndex] = match;
+                drawPattern();
+                modal.style.display = "none";
+            };
 
-        option.innerHTML = `
-            <div class="color-option-swatch" style="background-color: rgb(${match.r}, ${match.g}, ${match.b})"></div>
-            <div>
-                <strong>DMC ${match.floss}</strong> - ${match.name}
-            </div>
-        `;
+            colorList.appendChild(option);
+        });
+    }
 
-        option.onclick = () => {
-            // Update the global palette
-            globalDmcPalette[paletteIndex] = match;
+    // Initial render
+    renderColors();
 
-            // Redraw everything
-            drawPattern();
-
-            // Close modal
-            modal.style.display = "none";
-        };
-
-        modalOptions.appendChild(option);
+    // Listen for search
+    colorSearch.addEventListener('input', (e) => {
+        renderColors(e.target.value);
     });
+    
+    // Focus search input
+    setTimeout(() => colorSearch.focus(), 50);
 }
 
 function getContrastColor(r, g, b) {
